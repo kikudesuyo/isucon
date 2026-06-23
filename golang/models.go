@@ -38,6 +38,8 @@ type Post struct {
 	Comments     []Comment
 	User         User
 	CSRFToken    string
+	ImageURL     string
+	CreatedAtStr string
 }
 
 type Comment struct {

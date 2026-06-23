@@ -4,10 +4,7 @@ import "context"
 
 func dbInitialize(ctx context.Context) {
 	_ = memcacheClient.FlushAll()
-	clearUserCache()
-	clearPostCache()
-	clearCommentCountCache()
-	clearLatestCommentsCache()
+	clearLocalCache()
 	cleanupGeneratedImageFiles()
 
 	sqls := []string{

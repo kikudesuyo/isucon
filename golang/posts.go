@@ -18,6 +18,8 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 	for i := range results {
 		postIDs[i] = results[i].ID
 		results[i].CSRFToken = csrfToken
+		results[i].ImageURL = imageURL(results[i])
+		results[i].CreatedAtStr = results[i].CreatedAt.Format(ISO8601Format)
 		postMap[results[i].ID] = &results[i]
 	}
 

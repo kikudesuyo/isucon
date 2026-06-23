@@ -161,12 +161,28 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
+	var results []Post
 
-	err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", postsPerPage*2)
-	if err != nil {
-		log.Print(err)
-		return
+	if postIDs, ok := getIndexPostsCache(); ok {
+		// キャッシュヒット: IDリストからPostを個別取得
+		for _, id := range postIDs {
+			p, err := getPostByID(ctx, id)
+			if err != nil {
+				continue
+			}
+			results = append(results, p)
+		}
+	} else {
+		// キャッシュミス: DBから取得してIDリストをキャッシュ
+		if err := db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", postsPerPage*2); err != nil {
+			log.Print(err)
+			return
+		}
+		ids := make([]int, len(results))
+		for i, p := range results {
+			ids[i] = p.ID
+		}
+		setIndexPostsCache(ids)
 	}
 
 	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
@@ -198,17 +214,16 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// posts・commentCount・postIDsを並列取得
+	// posts・commentCountを並列取得（postIDsはresultsから生成）
 	var (
 		results      []Post
 		posts        []Post
 		commentCount int
-		postIDs      []int
-		errs         = make([]error, 3)
+		errs         = make([]error, 2)
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
@@ -218,10 +233,6 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		errs[1] = db.GetContext(ctx, &commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
 	}()
-	go func() {
-		defer wg.Done()
-		errs[2] = db.SelectContext(ctx, &postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
-	}()
 	wg.Wait()
 
 	for _, err := range errs {
@@ -229,6 +240,11 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 			log.Print(err)
 			return
 		}
+	}
+
+	postIDs := make([]int, len(results))
+	for i, p := range results {
+		postIDs[i] = p.ID
 	}
 
 	posts, err = makePosts(ctx, results, getCSRFToken(r), false)
@@ -435,6 +451,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	if err := writeImageFile(int(pid), mime, filedata); err != nil {
 		log.Print(err)
 	}
+	deleteIndexPostsCache()
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }

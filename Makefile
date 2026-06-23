@@ -19,8 +19,14 @@ NGINX_CONF := /etc/nginx/conf.d/isucon.conf
 build:
 	cd golang && GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o app .
 
+# ベンチ前にEC2上の増分ファイルを掃除
+clean-remote-disk:
+	$(SSH) "cd ~/private_isu/webapp/public/image && find . -maxdepth 1 -type f -printf '%f\n' | awk -F. '\$$1+0 > 10000 {print \"./\" \$$0}' | xargs -r rm -f"
+	$(SSH) "if [ \"\$$(mysql -u isuconp -pisuconp -N -e 'SELECT @@log_bin' 2>/dev/null)\" = \"0\" ]; then sudo find /var/lib/mysql -maxdepth 1 -type f -name 'binlog.*' -delete; fi"
+	$(SSH) "sudo truncate -s 0 /var/log/nginx/access.log /var/log/nginx/error.log && sudo find /var/lib/nginx/body -type f -delete && sudo journalctl --vacuum-size=50M >/dev/null && sudo apt-get clean && df -h / && du -sh ~/private_isu/webapp/public/image"
+
 # appバイナリをEC2に転送して再起動
-deploy: build
+deploy: build clean-remote-disk
 	$(SCP) golang/app $(HOST):/tmp/isucon-app
 	$(SSH) "mv /tmp/isucon-app $(REMOTE_DIR)/app && sudo systemctl restart isu-go && echo '✅ デプロイ完了'"
 
@@ -36,11 +42,6 @@ logs:
 ssh:
 	$(SSH)
 
-# ベンチ前にEC2上の増分ファイルを掃除
-clean-remote-disk:
-	$(SSH) "cd ~/private_isu/webapp/public/image && find . -maxdepth 1 -type f -printf '%f\n' | awk -F. '\$$1+0 > 10000 {print \"./\" \$$0}' | xargs -r rm -f"
-	$(SSH) "if [ \"\$$(mysql -u isuconp -pisuconp -N -e 'SELECT @@log_bin' 2>/dev/null)\" = \"0\" ]; then sudo find /var/lib/mysql -maxdepth 1 -type f -name 'binlog.*' -delete; fi"
-	$(SSH) "sudo truncate -s 0 /var/log/nginx/access.log /var/log/nginx/error.log && sudo find /var/lib/nginx/body -type f -delete && sudo journalctl --vacuum-size=50M >/dev/null && sudo apt-get clean && df -h / && du -sh ~/private_isu/webapp/public/image"
 
 # 掃除してからベンチ実行
 bench: clean-remote-disk
@@ -72,6 +73,7 @@ nginx-reload:
 add-index:
 	$(SSH) "mysql -u isuconp -pisuconp isuconp -e '\
 			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"posts\" AND index_name = \"idx_created_at\") = 0, \"ALTER TABLE posts ADD INDEX idx_created_at (created_at)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
+			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"posts\" AND index_name = \"idx_user_id_created_at\") = 0, \"ALTER TABLE posts ADD INDEX idx_user_id_created_at (user_id, created_at)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
 			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"comments\" AND index_name = \"idx_post_id\") = 0, \"ALTER TABLE comments ADD INDEX idx_post_id (post_id)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
 			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"comments\" AND index_name = \"idx_user_id\") = 0, \"ALTER TABLE comments ADD INDEX idx_user_id (user_id)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
 			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"users\" AND column_name = \"account_name\") = 0, \"ALTER TABLE users ADD INDEX idx_account_name (account_name)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
