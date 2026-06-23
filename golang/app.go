@@ -69,7 +69,11 @@ type Comment struct {
 	User      User
 }
 
-var memcacheClient *memcache.Client
+var (
+	memcacheClient *memcache.Client
+	reAccountName  = regexp.MustCompile(`\A[0-9a-zA-Z_]{3,}\z`)
+	rePassword     = regexp.MustCompile(`\A[0-9a-zA-Z_]{6,}\z`)
+)
 
 var templates map[string]*template.Template
 
@@ -138,8 +142,7 @@ func tryLogin(ctx context.Context, accountName, password string) *User {
 }
 
 func validateUser(accountName, password string) bool {
-	return regexp.MustCompile(`\A[0-9a-zA-Z_]{3,}\z`).MatchString(accountName) &&
-		regexp.MustCompile(`\A[0-9a-zA-Z_]{6,}\z`).MatchString(password)
+	return reAccountName.MatchString(accountName) && rePassword.MatchString(password)
 }
 
 func digest(_ context.Context, src string) string {
