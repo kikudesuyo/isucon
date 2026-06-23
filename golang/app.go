@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ const (
 	ISO8601Format = "2006-01-02T15:04:05-07:00"
 	UploadLimit   = 10 * 1024 * 1024 // 10mb
 )
+
+var imageDir = "../public/image"
 
 type User struct {
 	ID          int       `db:"id"`
@@ -784,6 +787,67 @@ func imageURL(p Post) string {
 	return "/image/" + strconv.Itoa(p.ID) + ext
 }
 
+func imageExt(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ""
+	}
+}
+
+func imageFilePath(id int, mime string) string {
+	return filepath.Join(imageDir, strconv.Itoa(id)+imageExt(mime))
+}
+
+func writeImageFile(id int, mime string, imgdata []byte) error {
+	if imageExt(mime) == "" {
+		return fmt.Errorf("unknown image mime: %s", mime)
+	}
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(imageFilePath(id, mime), imgdata, 0644)
+}
+
+func exportImages(ctx context.Context) error {
+	if envImageDir := os.Getenv("ISUCONP_IMAGE_DIR"); envImageDir != "" {
+		imageDir = envImageDir
+	}
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		return err
+	}
+
+	markerPath := filepath.Join(imageDir, ".exported")
+	if _, err := os.Stat(markerPath); err == nil {
+		return nil
+	}
+
+	rows, err := db.QueryxContext(ctx, "SELECT `id`, `mime`, `imgdata` FROM `posts`")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		p := Post{}
+		if err := rows.StructScan(&p); err != nil {
+			return err
+		}
+		if err := writeImageFile(p.ID, p.Mime, p.Imgdata); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return os.WriteFile(markerPath, []byte(time.Now().Format(time.RFC3339)), 0644)
+}
+
 func isLogin(u User) bool {
 	return u.ID != 0
 }
@@ -1088,7 +1152,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
@@ -1189,6 +1253,10 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 
 	pid, err := result.LastInsertId()
 	if err != nil {
+		log.Print(err)
+		return
+	}
+	if err := writeImageFile(int(pid), mime, filedata); err != nil {
 		log.Print(err)
 		return
 	}
@@ -1372,6 +1440,10 @@ func main() {
 	db.SetMaxOpenConns(50)
 	db.SetMaxIdleConns(50)
 	db.SetConnMaxLifetime(5 * time.Minute)
+
+	if err := exportImages(context.Background()); err != nil {
+		log.Fatalf("Failed to export images: %s.", err.Error())
+	}
 
 	initTemplates()
 
