@@ -4,7 +4,12 @@ SSH  := ssh -i $(KEY) $(HOST)
 SCP  := scp -i $(KEY)
 REMOTE_DIR := ~/private_isu/webapp/golang
 
-.PHONY: deploy build restart logs ssh add-index
+# 使い方: make pr ISSUE=5
+# PRを作成してissueを紐づけ、マージ後にブランチとissueをclose
+ISSUE ?=
+BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
+
+.PHONY: deploy build restart logs ssh add-index pr
 
 # ビルド（ローカル）
 build:
@@ -27,7 +32,20 @@ logs:
 ssh:
 	$(SSH)
 
-# MySQLにインデックスを追加
+# PRを作成してissueに紐づけ、マージ後にブランチとissueをclose
+# 使い方: make pr ISSUE=5
+pr:
+	@if [ -z "$(ISSUE)" ]; then echo "❌ ISSUE番号を指定してください: make pr ISSUE=5"; exit 1; fi
+	git push -u origin $(BRANCH)
+	gh pr create \
+		--title "$(BRANCH)" \
+		--body "closes #$(ISSUE)" \
+		--base main \
+		--head $(BRANCH)
+	gh pr merge --squash --delete-branch --auto
+	@echo "✅ PR作成完了 (issue #$(ISSUE) は自動でcloseされます)"
+
+# MySQLにインデックスを追加(issue/4で対応)
 add-index:
 	$(SSH) "mysql -u isuconp -pisuconp isuconp -e '\
 		ALTER TABLE posts ADD INDEX IF NOT EXISTS idx_created_at (created_at); \
