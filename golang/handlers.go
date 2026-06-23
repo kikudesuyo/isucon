@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +24,9 @@ func getInitialize(w http.ResponseWriter, r *http.Request) {
 
 func getLogin(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 
 	if isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -37,7 +41,11 @@ func getLogin(w http.ResponseWriter, r *http.Request) {
 
 func postLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if isLogin(getSessionUser(r)) {
+	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
+	if isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
@@ -61,7 +69,11 @@ func postLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRegister(w http.ResponseWriter, r *http.Request) {
-	if isLogin(getSessionUser(r)) {
+	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
+	if isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
@@ -74,7 +86,11 @@ func getRegister(w http.ResponseWriter, r *http.Request) {
 
 func postRegister(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if isLogin(getSessionUser(r)) {
+	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
+	if isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
@@ -141,6 +157,9 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 
 	results := []Post{}
 
@@ -233,6 +252,9 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 	}
 
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 
 	templates["user"].Execute(w, struct {
 		Posts          []Post
@@ -246,6 +268,10 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 func getPosts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 	m, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -286,6 +312,10 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 	pidStr := r.PathValue("id")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
@@ -293,14 +323,17 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", pid)
+	p, err := getPostByID(ctx, pid)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), true)
+	posts, err := makePosts(ctx, []Post{p}, getCSRFToken(r), true)
 	if err != nil {
 		log.Print(err)
 		return
@@ -311,9 +344,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := posts[0]
-
-	me := getSessionUser(r)
+	p = posts[0]
 
 	templates["post_id"].Execute(w, struct {
 		Post Post
@@ -324,6 +355,9 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 func postIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 	if !isLogin(me) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
@@ -400,7 +434,6 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := writeImageFile(int(pid), mime, filedata); err != nil {
 		log.Print(err)
-		return
 	}
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
@@ -442,6 +475,9 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 func postComment(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 	if !isLogin(me) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
@@ -473,6 +509,9 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 	if !isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
@@ -500,6 +539,9 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	me := getSessionUser(r)
+	if rejectBannedUser(w, me) {
+		return
+	}
 	if !isLogin(me) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return

@@ -44,6 +44,14 @@ var (
 		byPostID:   make(map[int][]Comment),
 		generation: 1,
 	}
+	postCache = struct {
+		sync.RWMutex
+		byID       map[int]Post
+		generation int64
+	}{
+		byID:       make(map[int]Post),
+		generation: 1,
+	}
 )
 
 func clearUserCache() {
@@ -241,6 +249,85 @@ func getUsersByIDs(ctx context.Context, ids []int) (map[int]User, error) {
 		users[u.ID] = u
 	}
 	return users, nil
+}
+
+func clearPostCache() {
+	postCache.Lock()
+	postCache.byID = make(map[int]Post)
+	postCache.generation++
+	postCache.Unlock()
+}
+
+func postCacheGeneration() int64 {
+	postCache.RLock()
+	generation := postCache.generation
+	postCache.RUnlock()
+	return generation
+}
+
+func postCacheKey(id int) string {
+	return fmt.Sprintf("isuconp:%s:%d:post:id:%d", cacheNamespace, postCacheGeneration(), id)
+}
+
+func getCachedPostByID(id int) (Post, bool) {
+	postCache.RLock()
+	p, ok := postCache.byID[id]
+	postCache.RUnlock()
+	return p, ok
+}
+
+func setLocalPostCache(p Post) {
+	postCache.Lock()
+	postCache.byID[p.ID] = p
+	postCache.Unlock()
+}
+
+func getMemcachedPost(key string) (Post, bool) {
+	item, err := memcacheClient.Get(key)
+	if err != nil {
+		return Post{}, false
+	}
+
+	p := Post{}
+	if err := json.Unmarshal(item.Value, &p); err != nil {
+		return Post{}, false
+	}
+	return p, true
+}
+
+func setPostCache(p Post) {
+	p.Imgdata = nil
+	p.CommentCount = 0
+	p.Comments = nil
+	p.User = User{}
+	p.CSRFToken = ""
+
+	setLocalPostCache(p)
+	value, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	_ = memcacheClient.Set(&memcache.Item{
+		Key:   postCacheKey(p.ID),
+		Value: value,
+	})
+}
+
+func getPostByID(ctx context.Context, id int) (Post, error) {
+	if p, ok := getCachedPostByID(id); ok {
+		return p, nil
+	}
+	if p, ok := getMemcachedPost(postCacheKey(id)); ok {
+		setLocalPostCache(p)
+		return p, nil
+	}
+
+	p := Post{}
+	if err := db.GetContext(ctx, &p, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `id` = ?", id); err != nil {
+		return Post{}, err
+	}
+	setPostCache(p)
+	return p, nil
 }
 
 func clearCommentCountCache() {

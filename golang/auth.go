@@ -88,6 +88,14 @@ func isLogin(u User) bool {
 	return u.ID != 0
 }
 
+func rejectBannedUser(w http.ResponseWriter, u User) bool {
+	if u.ID != 0 && u.DelFlg != 0 {
+		w.WriteHeader(http.StatusForbidden)
+		return true
+	}
+	return false
+}
+
 func getCSRFToken(r *http.Request) string {
 	session := getSession(r)
 	csrfToken, ok := session.Values["csrf_token"]

@@ -12,6 +12,8 @@ import (
 
 var imageDir = "../public/image"
 
+const initialPostMaxID = 10000
+
 func cleanupGeneratedImageFiles() {
 	entries, err := os.ReadDir(imageDir)
 	if err != nil {
@@ -27,7 +29,7 @@ func cleanupGeneratedImageFiles() {
 			continue
 		}
 		id, err := strconv.Atoi(name[:dot])
-		if err != nil || id <= 10000 {
+		if err != nil || id <= initialPostMaxID {
 			continue
 		}
 		_ = os.Remove(filepath.Join(imageDir, name))
@@ -81,6 +83,7 @@ func exportImages(ctx context.Context) error {
 	if err := os.MkdirAll(imageDir, 0755); err != nil {
 		return err
 	}
+	cleanupGeneratedImageFiles()
 
 	markerPath := filepath.Join(imageDir, ".exported")
 	if _, err := os.Stat(markerPath); err == nil {

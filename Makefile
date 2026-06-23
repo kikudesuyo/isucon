@@ -13,7 +13,7 @@ BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 
 NGINX_CONF := /etc/nginx/conf.d/isucon.conf
 
-.PHONY: deploy build restart logs ssh add-index pr nginx-deploy nginx-reload
+.PHONY: deploy build restart logs ssh clean-remote-disk bench add-index pr nginx-deploy nginx-reload
 
 # ビルド（EC2向け）
 build:
@@ -35,6 +35,16 @@ logs:
 # EC2にSSH接続
 ssh:
 	$(SSH)
+
+# ベンチ前にEC2上の増分ファイルを掃除
+clean-remote-disk:
+	$(SSH) "cd ~/private_isu/webapp/public/image && find . -maxdepth 1 -type f -printf '%f\n' | awk -F. '\$$1+0 > 10000 {print \"./\" \$$0}' | xargs -r rm -f"
+	$(SSH) "if [ \"\$$(mysql -u isuconp -pisuconp -N -e 'SELECT @@log_bin' 2>/dev/null)\" = \"0\" ]; then sudo find /var/lib/mysql -maxdepth 1 -type f -name 'binlog.*' -delete; fi"
+	$(SSH) "sudo truncate -s 0 /var/log/nginx/access.log /var/log/nginx/error.log && sudo find /var/lib/nginx/body -type f -delete && sudo journalctl --vacuum-size=50M >/dev/null && sudo apt-get clean && df -h / && du -sh ~/private_isu/webapp/public/image"
+
+# 掃除してからベンチ実行
+bench: clean-remote-disk
+	$(SSH) "cd ~/private_isu/benchmarker && ./bin/benchmarker -target http://localhost -userdata ./userdata"
 
 # PRを作成してissueに紐づけ、マージ後にブランチとissueをclose
 # 使い方: make pr ISSUE=5
