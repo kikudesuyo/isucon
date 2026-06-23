@@ -1,4 +1,6 @@
 all: app
 
-app: *.go go.mod go.sum
+app:
 	go build -o app
+
+.PHONY: app
