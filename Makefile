@@ -49,8 +49,8 @@ pr:
 
 # nginx設定をEC2に転送してリロード
 nginx-deploy:
-	$(SCP) etc/nginx/isucon.conf $(HOST):$(NGINX_CONF)
-	$(SSH) "sudo nginx -t && sudo systemctl reload nginx && echo '✅ nginx設定更新完了'"
+	$(SCP) etc/nginx/isucon.conf $(HOST):/tmp/isucon.conf
+	$(SSH) "sudo mv /tmp/isucon.conf $(NGINX_CONF) && sudo nginx -t && sudo systemctl reload nginx && echo '✅ nginx設定更新完了'"
 
 # nginxをリロードのみ
 nginx-reload:
