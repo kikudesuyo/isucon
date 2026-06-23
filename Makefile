@@ -9,7 +9,9 @@ REMOTE_DIR := ~/private_isu/webapp/golang
 ISSUE ?=
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 
-.PHONY: deploy build restart logs ssh add-index pr
+NGINX_CONF := /etc/nginx/conf.d/isucon.conf
+
+.PHONY: deploy build restart logs ssh add-index pr nginx-deploy nginx-reload
 
 # ビルド（ローカル）
 build:
@@ -44,6 +46,15 @@ pr:
 		--head $(BRANCH)
 	gh pr merge --squash --delete-branch --auto
 	@echo "✅ PR作成完了 (issue #$(ISSUE) は自動でcloseされます)"
+
+# nginx設定をEC2に転送してリロード
+nginx-deploy:
+	$(SCP) etc/nginx/isucon.conf $(HOST):$(NGINX_CONF)
+	$(SSH) "sudo nginx -t && sudo systemctl reload nginx && echo '✅ nginx設定更新完了'"
+
+# nginxをリロードのみ
+nginx-reload:
+	$(SSH) "sudo nginx -t && sudo systemctl reload nginx && echo '✅ nginxリロード完了'"
 
 # MySQLにインデックスを追加(issue/4で対応)
 add-index:
