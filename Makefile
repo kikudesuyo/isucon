@@ -3,6 +3,8 @@ KEY  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))ws-default-keypair.pem
 SSH  := ssh -i $(KEY) $(HOST)
 SCP  := scp -i $(KEY)
 REMOTE_DIR := ~/private_isu/webapp/golang
+GOOS ?= linux
+GOARCH ?= amd64
 
 # 使い方: make pr ISSUE=5
 # PRを作成してissueを紐づけ、マージ後にブランチとissueをclose
@@ -13,14 +15,14 @@ NGINX_CONF := /etc/nginx/conf.d/isucon.conf
 
 .PHONY: deploy build restart logs ssh add-index pr nginx-deploy nginx-reload
 
-# ビルド（ローカル）
+# ビルド（EC2向け）
 build:
-	cd golang && go build -o app .
+	cd golang && GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o app .
 
-# app.goをEC2に転送してビルド・再起動
-deploy:
-	$(SCP) golang/app.go $(HOST):$(REMOTE_DIR)/app.go
-	$(SSH) "cd $(REMOTE_DIR) && PATH=/home/isucon/.local/go/bin:\$$PATH make app && sudo systemctl restart isu-go && echo '✅ デプロイ完了'"
+# appバイナリをEC2に転送して再起動
+deploy: build
+	$(SCP) golang/app $(HOST):/tmp/isucon-app
+	$(SSH) "mv /tmp/isucon-app $(REMOTE_DIR)/app && sudo systemctl restart isu-go && echo '✅ デプロイ完了'"
 
 # EC2でサービス再起動のみ
 restart:
