@@ -48,7 +48,8 @@ pr:
 # MySQLにインデックスを追加(issue/4で対応)
 add-index:
 	$(SSH) "mysql -u isuconp -pisuconp isuconp -e '\
-		ALTER TABLE posts ADD INDEX IF NOT EXISTS idx_created_at (created_at); \
-		ALTER TABLE comments ADD INDEX IF NOT EXISTS idx_post_id (post_id); \
-		ALTER TABLE comments ADD INDEX IF NOT EXISTS idx_user_id (user_id); \
-	' && echo '✅ インデックス追加完了'"
+			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"posts\" AND index_name = \"idx_created_at\") = 0, \"ALTER TABLE posts ADD INDEX idx_created_at (created_at)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
+			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"comments\" AND index_name = \"idx_post_id\") = 0, \"ALTER TABLE comments ADD INDEX idx_post_id (post_id)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
+			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"comments\" AND index_name = \"idx_user_id\") = 0, \"ALTER TABLE comments ADD INDEX idx_user_id (user_id)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
+			SET @sql := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = \"users\" AND column_name = \"account_name\") = 0, \"ALTER TABLE users ADD INDEX idx_account_name (account_name)\", \"SELECT 1\"); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt; \
+		' && echo '✅ インデックス追加完了'"
