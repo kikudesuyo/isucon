@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -209,51 +210,74 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 		postMap[results[i].ID] = &results[i]
 	}
 
-	// 投稿ユーザーをIN句で一括取得
+	// ユーザー・コメント数・コメントを並列取得
 	userIDs := make([]int, 0, len(results))
 	for _, p := range results {
 		userIDs = append(userIDs, p.UserID)
 	}
-	query, args, err := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", userIDs)
-	if err != nil {
-		return nil, fmt.Errorf("makePosts IN users: %w", err)
+
+	type commentCount struct {
+		PostID int `db:"post_id"`
+		Count  int `db:"count"`
 	}
-	var postUsers []User
-	if err = db.SelectContext(ctx, &postUsers, query, args...); err != nil {
-		return nil, fmt.Errorf("makePosts select users: %w", err)
+
+	var (
+		postUsers       []User
+		counts          []commentCount
+		allCommentsList []Comment
+		parallelErrs    = make([]error, 3)
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		q, a, e := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", userIDs)
+		if e != nil {
+			parallelErrs[0] = fmt.Errorf("makePosts IN users: %w", e)
+			return
+		}
+		parallelErrs[0] = db.SelectContext(ctx, &postUsers, q, a...)
+	}()
+
+	go func() {
+		defer wg.Done()
+		q, a, e := sqlx.In("SELECT `post_id`, COUNT(*) AS `count` FROM `comments` WHERE `post_id` IN (?) GROUP BY `post_id`", postIDs)
+		if e != nil {
+			parallelErrs[1] = fmt.Errorf("makePosts IN comment counts: %w", e)
+			return
+		}
+		parallelErrs[1] = db.SelectContext(ctx, &counts, q, a...)
+	}()
+
+	go func() {
+		defer wg.Done()
+		q, a, e := sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `created_at` DESC", postIDs)
+		if e != nil {
+			parallelErrs[2] = fmt.Errorf("makePosts IN comments: %w", e)
+			return
+		}
+		parallelErrs[2] = db.SelectContext(ctx, &allCommentsList, q, a...)
+	}()
+
+	wg.Wait()
+
+	for _, e := range parallelErrs {
+		if e != nil {
+			return nil, e
+		}
 	}
+
 	userMap := make(map[int]User, len(postUsers))
 	for _, u := range postUsers {
 		userMap[u.ID] = u
 	}
 
-	// コメント数をIN句で一括取得
-	type commentCount struct {
-		PostID int `db:"post_id"`
-		Count  int `db:"count"`
-	}
-	query, args, err = sqlx.In("SELECT `post_id`, COUNT(*) AS `count` FROM `comments` WHERE `post_id` IN (?) GROUP BY `post_id`", postIDs)
-	if err != nil {
-		return nil, fmt.Errorf("makePosts IN comment counts: %w", err)
-	}
-	var counts []commentCount
-	if err = db.SelectContext(ctx, &counts, query, args...); err != nil {
-		return nil, fmt.Errorf("makePosts select comment counts: %w", err)
-	}
 	for _, c := range counts {
 		if p, ok := postMap[c.PostID]; ok {
 			p.CommentCount = c.Count
 		}
-	}
-
-	// コメントをIN句で一括取得（投稿ごとに最新3件 or 全件）
-	query, args, err = sqlx.In("SELECT * FROM `comments` WHERE `post_id` IN (?) ORDER BY `created_at` DESC", postIDs)
-	if err != nil {
-		return nil, fmt.Errorf("makePosts IN comments: %w", err)
-	}
-	var allCommentsList []Comment
-	if err = db.SelectContext(ctx, &allCommentsList, query, args...); err != nil {
-		return nil, fmt.Errorf("makePosts select comments: %w", err)
 	}
 
 	// コメントユーザーを一括取得
@@ -266,13 +290,13 @@ func makePosts(ctx context.Context, results []Post, csrfToken string, allComment
 		for id := range commentUserIDSet {
 			commentUserIDs = append(commentUserIDs, id)
 		}
-		query, args, err = sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", commentUserIDs)
-		if err != nil {
-			return nil, fmt.Errorf("makePosts IN comment users: %w", err)
+		q, a, e := sqlx.In("SELECT * FROM `users` WHERE `id` IN (?)", commentUserIDs)
+		if e != nil {
+			return nil, fmt.Errorf("makePosts IN comment users: %w", e)
 		}
 		var commentUsers []User
-		if err = db.SelectContext(ctx, &commentUsers, query, args...); err != nil {
-			return nil, fmt.Errorf("makePosts select comment users: %w", err)
+		if e = db.SelectContext(ctx, &commentUsers, q, a...); e != nil {
+			return nil, fmt.Errorf("makePosts select comment users: %w", e)
 		}
 		for _, u := range commentUsers {
 			userMap[u.ID] = u
@@ -511,51 +535,54 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
+	// posts・commentCount・postIDsを並列取得
+	var (
+		results      []Post
+		posts        []Post
+		commentCount int
+		postIDs      []int
+		errs         = make([]error, 3)
+	)
 
-	err = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		errs[0] = db.SelectContext(ctx, &results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[1] = db.GetContext(ctx, &commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[2] = db.SelectContext(ctx, &postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
+	}()
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			log.Print(err)
+			return
+		}
+	}
+
+	posts, err = makePosts(ctx, results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(ctx, results, getCSRFToken(r), false)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
-	commentCount := 0
-	err = db.GetContext(ctx, &commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
-	postIDs := []int{}
-	err = db.SelectContext(ctx, &postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
-	if err != nil {
-		log.Print(err)
-		return
-	}
 	postCount := len(postIDs)
-
 	commentedCount := 0
 	if postCount > 0 {
-		s := []string{}
-		for range postIDs {
-			s = append(s, "?")
-		}
-		placeholder := strings.Join(s, ", ")
-
-		// convert []int -> []any
-		args := make([]any, len(postIDs))
-		for i, v := range postIDs {
-			args[i] = v
-		}
-
-		err = db.GetContext(ctx, &commentedCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ("+placeholder+")", args...)
+		q, args, err := sqlx.In("SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN (?)", postIDs)
 		if err != nil {
+			log.Print(err)
+			return
+		}
+		if err = db.GetContext(ctx, &commentedCount, q, args...); err != nil {
 			log.Print(err)
 			return
 		}
